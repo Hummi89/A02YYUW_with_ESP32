@@ -1,0 +1,224 @@
+/*********
+
+  30/8/2020  Thomas Hummitzsch  thomas[dot]hummitzsch[at]gmail.com
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+    
+  Sample Code for A02YYUW
+  *@Brief : This example uses the ultrasonic sensor A02YYUW and the ESP32 board.
+  The distance is sent via wifi to a MQTT broker for further evaluation.
+  I do not use the checksum test instead i filter the readings using min and max distance values. 
+  The readings are very stable, the ESP32 is powered by the onboard 3.3V and GND.
+  *Note* the ESP32 can flexibly change its hardware serial ports
+  
+      Parts:
+    -mini ESP32 Wemos 
+    -A02YYUW waterprooft ultrasonic sensor (SKU:SEN0311)
+    
+  
+*********/
+
+
+#include <PubSubClient.h>
+#include <WiFi.h>
+
+//************************* User Defined Variables ********************************************************//
+// the <-- mark the places where you have to make your own settings.
+
+#define RXD2 17   // <-- define your favourite RX pin
+#define TXD2 16   // <-- define your favourite TX pin
+
+/*   #Variables for wifi#    */
+
+const char* ssid = "WIFI-SSID";                   // <-- replace with your wifi ssid
+const char* password = "WIFI-PASS";               // <-- replace with your wifi password
+WiFiClient espClient;
+byte mac[6];  
+
+
+
+/*   #Variables for mqtt#    */
+
+const char* mqtt_server = "192.168.1.1";      //  <--  replace with your mqtt Server IP
+const int mqttPort = 1883;                    //  <--  replace with your mqtt Server port (default 1883)
+const char* output_topic = "esp32/distance";  //  <--  replace with your mqtt output topic
+
+PubSubClient client(espClient);
+
+
+
+
+/*   #Variables to calculate the distance#    */
+
+/*The minimum and maximum distance helps you to minimize wrong readings. If you already know the expected values of your measurement, enter them here. */
+float min_distance = 40;      // <-- replace with your expected min distance in mm
+float max_distance = 2000;    // <-- replace with your expected max distance in mm
+
+unsigned char data[4]={};
+float distance;
+float sum=0;   
+int avg=0;
+char avg_string[4];
+int s=0;
+
+//***************************** END Of Recomended User Inputs *****************************************************************//
+
+
+
+
+
+
+
+//*********************************Setup - runs Once and starts interfaces etc ******************************************************//
+
+void setup() 
+  {
+  
+    Serial.begin(115200); //start Serial (serial monitor and programming interface) 
+  
+    Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);  //start Serial2 (Hardware Serial) on defined RXD2/TXD2 Pins  to recive data from the A02YYUW. speed 9600 baud; 8N1 means “word” of 8 bits; No parity; 1 stop bit;
+    
+    
+  
+    setup_wifi();                         //call the wifi function 
+    client.setServer(mqtt_server, 1883);  //set the mqtt server
+   };
+   
+//******************************************* End of Setup **********************************************************************//
+
+
+
+//************************************* Main Loop - Runs Forever ***************************************************************//
+//Moved Heavy Work To subroutines so you can call them from main loop without cluttering the main loop
+
+void loop()
+{
+  if (!client.connected()) 
+   {
+    reconnect();
+    }
+  measure_distance(); 
+  } 
+//************************************** End Of Main Loop **********************************************************************//
+
+              
+  
+              
+ 
+            
+          
+
+
+//************************************* Subroutines - they are called from the mainloop or setup ***************************************************************//
+
+void setup_wifi() {
+  delay(10);
+  // Connecting the ESP32 to your WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+  
+  WiFi.macAddress(mac);
+  Serial.print("ESP32 MAC: ");
+  Serial.print(mac[5],HEX);
+  Serial.print(":");
+  Serial.print(mac[4],HEX);
+  Serial.print(":");
+  Serial.print(mac[3],HEX);
+  Serial.print(":");
+  Serial.print(mac[2],HEX);
+  Serial.print(":");
+  Serial.print(mac[1],HEX);
+  Serial.print(":");
+  Serial.println(mac[0],HEX);
+}
+
+//****************************************************************************************************//
+
+void reconnect() 
+{
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("ESP32Client")) {
+      Serial.println("connected");
+      // Subscribe 
+      client.subscribe("esp32/input");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+//****************************************************************************************************//
+
+void measure_distance() 
+    {
+      do
+      {
+      for(int i=0;i<4;i++)
+       {
+         data[i]=Serial2.read();
+       }
+      }while(Serial2.read()==0xff);
+  Serial2.flush();
+
+  if(data[0]==0xff)
+      {
+          distance=(data[1]<<8)+data[2];
+          if (distance > min_distance && distance < max_distance)
+            {
+              /* good for debugging
+                Serial.print("distance=");
+                Serial.print(distance/10);
+                Serial.println("cm");
+               */
+              sum=sum+distance;
+              s=s+1;
+          }
+            
+                              //!!##########################################################################################!!//
+     delay(100);              //!!    Don't edit the delay, I haven't found out why yet but it produces wrong readings!     !!//
+                              //!!##########################################################################################!!//             
+
+     if (s > 10 )   /*  Instead of changing the delay I calculate the average of s values. s=10=1 second */
+        {
+            avg = (int) sum/s;                
+            sum=0;
+            Serial.println(avg);
+            dtostrf(avg, 1, 0, avg_string);
+            client.publish(output_topic, avg_string);
+            s=0;
+         }
+       }
+     }
+
+//************************** End of Subroutines ***************************//
